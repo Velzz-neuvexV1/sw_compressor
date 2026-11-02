@@ -85,7 +85,7 @@ btnCompress.addEventListener('click', async () => {
     progressBar.style.width = '10%';
     progressPercent.textContent = '10%';
 
-    // Memuat modul FFmpeg core yang compatible dengan static hosting (tanpa butuh COOP/COEP headers)
+    // Menggunakan jsDelivr dengan toBlobURL agar terhindar dari error CORS Worker
     if (!ffmpeg.loaded) {
       const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
       await ffmpeg.load({
@@ -108,7 +108,6 @@ btnCompress.addEventListener('click', async () => {
 
     // Monitoring progress kompresi
     ffmpeg.on('progress', ({ progress }) => {
-      // Nilai progress berkisar dari 0.0 sampai 1.0
       const pct = Math.min(Math.max(Math.round(progress * 70) + 30, 30), 100);
       progressBar.style.width = `${pct}%`;
       progressPercent.textContent = `${pct}%`;
@@ -117,7 +116,6 @@ btnCompress.addEventListener('click', async () => {
     const crf = qualitySelect.value;
     const res = resolutionSelect.value;
 
-    // Menyiapkan argumen perintah FFmpeg
     let args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'ultrafast'];
 
     if (res !== 'original') {
@@ -129,11 +127,10 @@ btnCompress.addEventListener('click', async () => {
     // Jalankan eksekusi kompresi
     await ffmpeg.exec(args);
 
-    statusText.textContent = "Menyelesaikan hasil...";
+    statusTest.textContent = "Menyelesaikan hasil...";
     progressBar.style.width = '100%';
     progressPercent.textContent = '100%';
 
-    // Membaca output file dari virtual filesystem
     const data = await ffmpeg.readFile(outputName);
     const compressedBlob = new Blob([data.buffer], { type: 'video/mp4' });
 
@@ -145,7 +142,6 @@ btnCompress.addEventListener('click', async () => {
     }
     downloadLink.href = URL.createObjectURL(compressedBlob);
 
-    // Membersihkan memory di virtual filesystem
     await ffmpeg.deleteFile(inputName);
     await ffmpeg.deleteFile(outputName);
 
