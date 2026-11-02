@@ -87,7 +87,7 @@ btnCompress.addEventListener('click', async () => {
 
     // Memuat modul FFmpeg core yang compatible dengan static hosting (tanpa butuh COOP/COEP headers)
     if (!ffmpeg.loaded) {
-      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
       await ffmpeg.load({
         coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
         wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
