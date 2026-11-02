@@ -1,11 +1,8 @@
-const { createFFmpeg, fetchFile } = FFmpeg;
+// Destrukturisasi pustaka FFmpeg v0.12+ dari window scope
+const { FFmpeg } = FFmpegWASM;
+const { fetchFile, toBlobURL } = FFmpegUtil;
 
-// Inisialisasi dengan opsi tambahan
-const ffmpeg = createFFmpeg({
-  log: true,
-  corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
-  // Menggunakan worker dan pengaturan memori dasar jika didukung
-});
+const ffmpeg = new FFmpeg();
 
 // DOM Elements
 const dropZone = document.getElementById('dropZone');
@@ -39,7 +36,10 @@ function formatBytes(bytes) {
 
 // Drag and Drop Handler
 dropZone.addEventListener('click', () => videoInput.click());
-dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragover', (e) => { 
+  e.preventDefault(); 
+  dropZone.classList.add('dragover'); 
+});
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
@@ -85,8 +85,13 @@ btnCompress.addEventListener('click', async () => {
     progressBar.style.width = '10%';
     progressPercent.textContent = '10%';
 
-    if (!ffmpeg.isLoaded()) {
-      await ffmpeg.load();
+    // Memuat modul FFmpeg core yang compatible dengan static hosting (tanpa butuh COOP/COEP headers)
+    if (!ffmpeg.loaded) {
+      const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      });
     }
 
     statusText.textContent = "Menyiapkan file video...";
@@ -96,13 +101,15 @@ btnCompress.addEventListener('click', async () => {
     const inputName = 'input_video' + getFileExtension(rawFile.name);
     const outputName = 'output_compressed.mp4';
 
-    ffmpeg.FS('writeFile', inputName, await fetchFile(rawFile));
+    // Menulis file input ke virtual filesystem FFmpeg
+    await ffmpeg.writeFile(inputName, await fetchFile(rawFile));
 
     statusText.textContent = "Mengompresi Video...";
-    // Menangkap progress rendering video
-    ffmpeg.setProgress(({ ratio }) => {
-      // ratio berkisar dari 0 sampai 1
-      const pct = Math.min(Math.max(Math.round(ratio * 70) + 30, 30), 100);
+
+    // Monitoring progress kompresi
+    ffmpeg.on('progress', ({ progress }) => {
+      // Nilai progress berkisar dari 0.0 sampai 1.0
+      const pct = Math.min(Math.max(Math.round(progress * 70) + 30, 30), 100);
       progressBar.style.width = `${pct}%`;
       progressPercent.textContent = `${pct}%`;
     });
@@ -110,21 +117,24 @@ btnCompress.addEventListener('click', async () => {
     const crf = qualitySelect.value;
     const res = resolutionSelect.value;
 
-    let args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'medium'];
+    // Menyiapkan argumen perintah FFmpeg
+    let args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'ultrafast'];
 
     if (res !== 'original') {
       args.push('-vf', `scale=-2:${res}`);
     }
 
-    args.push('-c:a', 'aac', '-b:a', '128k', outputName);
+    args.push('-c:a', 'aac', '-b:a', '96k', outputName);
 
-    await ffmpeg.run(...args);
+    // Jalankan eksekusi kompresi
+    await ffmpeg.exec(args);
 
     statusText.textContent = "Menyelesaikan hasil...";
     progressBar.style.width = '100%';
     progressPercent.textContent = '100%';
 
-    const data = ffmpeg.FS('readFile', outputName);
+    // Membaca output file dari virtual filesystem
+    const data = await ffmpeg.readFile(outputName);
     const compressedBlob = new Blob([data.buffer], { type: 'video/mp4' });
 
     sizeBeforeEl.textContent = formatBytes(rawFile.size);
@@ -135,8 +145,9 @@ btnCompress.addEventListener('click', async () => {
     }
     downloadLink.href = URL.createObjectURL(compressedBlob);
 
-    ffmpeg.FS('unlink', inputName);
-    ffmpeg.FS('unlink', outputName);
+    // Membersihkan memory di virtual filesystem
+    await ffmpeg.deleteFile(inputName);
+    await ffmpeg.deleteFile(outputName);
 
     setTimeout(() => {
       progressSection.classList.add('hidden');
@@ -144,8 +155,8 @@ btnCompress.addEventListener('click', async () => {
     }, 500);
 
   } catch (error) {
-    console.error(error);
-    alert('Terjadi kesalahan saat memproses video. Cek console (F12) untuk detailnya.');
+    console.error("Detail Error FFmpeg:", error);
+    alert('Terjadi kesalahan saat memproses video: ' + (error.message || error));
     progressSection.classList.add('hidden');
     processSection.classList.remove('hidden');
   }
