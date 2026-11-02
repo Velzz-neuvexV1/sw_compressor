@@ -1,13 +1,3 @@
-const { createFFmpeg, fetchFile } = FFmpeg;
-
-// Batasi alokasi memori Emscripten agar tidak langsung minta 1GB+
-const ffmpeg = createFFmpeg({
-  log: true,
-  corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
-  // Opsi paksa alokasi awal RAM lebih kecil
-  INITIAL_MEMORY: 67108864, // 64MB awal (akan auto-expand jika kurang)
-});
-
 // DOM Elements
 const dropZone = document.getElementById('dropZone');
 const videoInput = document.getElementById('videoInput');
@@ -74,79 +64,120 @@ btnReset.addEventListener('click', () => {
   dropZone.classList.remove('hidden');
 });
 
-// Compress Engine Call
+// Compress Engine via Native Browser Canvas & MediaRecorder
 btnCompress.addEventListener('click', async () => {
   if (!rawFile) return;
 
   processSection.classList.add('hidden');
   progressSection.classList.remove('hidden');
-  
+
   try {
-    statusText.textContent = "Memuat Engine FFmpeg (bisa beberapa detik)...";
+    statusText.textContent = "Menyiapkan video...";
     progressBar.style.width = '10%';
     progressPercent.textContent = '10%';
 
-    if (!ffmpeg.isLoaded()) {
-      await ffmpeg.load();
-    }
+    const videoEl = document.createElement('video');
+    videoEl.src = URL.createObjectURL(rawFile);
+    videoEl.muted = true;
+    videoEl.playsInline = true;
 
-    statusText.textContent = "Menyiapkan file video...";
-    progressBar.style.width = '30%';
-    progressPercent.textContent = '30%';
-
-    const inputName = 'input_video' + getFileExtension(rawFile.name);
-    const outputName = 'output_compressed.mp4';
-
-    ffmpeg.FS('writeFile', inputName, await fetchFile(rawFile));
-
-    statusText.textContent = "Mengompresi Video...";
-    
-    // Progress listener untuk v0.11
-    ffmpeg.setProgress(({ ratio }) => {
-      const pct = Math.min(Math.max(Math.round(ratio * 70) + 30, 30), 100);
-      progressBar.style.width = `${pct}%`;
-      progressPercent.textContent = `${pct}%`;
+    await new Promise((resolve, reject) => {
+      videoEl.onloadedmetadata = resolve;
+      videoEl.onerror = reject;
     });
 
-    const crf = qualitySelect.value;
-    const res = resolutionSelect.value;
+    // Tentukan target resolusi
+    const targetRes = resolutionSelect.value;
+    let targetWidth = videoEl.videoWidth;
+    let targetHeight = videoEl.videoHeight;
 
-    let args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'ultrafast'];
-
-    if (res !== 'original') {
-      args.push('-vf', `scale=-2:${res}`);
+    if (targetRes !== 'original') {
+      const targetH = parseInt(targetRes);
+      if (videoEl.videoHeight > targetH) {
+        const ratio = targetH / videoEl.videoHeight;
+        targetHeight = targetH;
+        targetWidth = Math.round(videoEl.videoWidth * ratio);
+      }
     }
 
-    args.push('-c:a', 'aac', '-b:a', '96k', outputName);
+    // Tentukan target bitrate berdasarkan kualitas
+    const crfVal = qualitySelect.value;
+    let targetBitrate = 1500000; // Default ~1.5 Mbps
+    if (crfVal === '21') targetBitrate = 2500000; // High quality
+    else if (crfVal === '24') targetBitrate = 1200000; // Medium
+    else if (crfVal === '28') targetBitrate = 600000;  // Low size
 
-    await ffmpeg.run(...args);
+    const canvas = document.createElement('canvas');
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
 
-    statusText.textContent = "Menyelesaikan hasil...";
-    progressBar.style.width = '100%';
-    progressPercent.textContent = '100%';
+    const stream = canvas.captureStream(30);
+    
+    // Ambil track audio jika ada
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const sourceNode = audioContext.createMediaElementSource(videoEl);
+    const destNode = audioContext.createMediaStreamDestination();
+    sourceNode.connect(destNode);
+    sourceNode.connect(audioContext.destination);
 
-    const data = ffmpeg.FS('readFile', outputName);
-    const compressedBlob = new Blob([data.buffer], { type: 'video/mp4' });
-
-    sizeBeforeEl.textContent = formatBytes(rawFile.size);
-    sizeAfterEl.textContent = formatBytes(compressedBlob.size);
-
-    if (downloadLink.href) {
-      URL.revokeObjectURL(downloadLink.href);
+    if (destNode.stream.getAudioTracks().length > 0) {
+      stream.addTrack(destNode.stream.getAudioTracks()[0]);
     }
-    downloadLink.href = URL.createObjectURL(compressedBlob);
 
-    ffmpeg.FS('unlink', inputName);
-    ffmpeg.FS('unlink', outputName);
+    const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+      ? 'video/webm;codecs=vp9'
+      : (MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm');
 
-    setTimeout(() => {
+    const mediaRecorder = new MediaRecorder(stream, {
+      mimeType: mimeType,
+      videoBitsPerSecond: targetBitrate
+    });
+
+    const chunks = [];
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) chunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = () => {
+      const compressedBlob = new Blob(chunks, { type: mimeType });
+      sizeBeforeEl.textContent = formatBytes(rawFile.size);
+      sizeAfterEl.textContent = formatBytes(compressedBlob.size);
+
+      if (downloadLink.href) URL.revokeObjectURL(downloadLink.href);
+      downloadLink.href = URL.createObjectURL(compressedBlob);
+      downloadLink.download = `compressed_sw.${mimeType.includes('mp4') ? 'mp4' : 'webm'}`;
+
       progressSection.classList.add('hidden');
       resultSection.classList.remove('hidden');
-    }, 500);
+      audioContext.close();
+    };
 
-  } catch (error) {
-    console.error("Detail Error:", error);
-    alert('Terjadi kesalahan saat memproses video: ' + (error.message || error));
+    statusText.textContent = "Mengompresi video...";
+    mediaRecorder.start();
+    await videoEl.play();
+
+    // Render frame ke canvas & jalankan progress
+    const renderFrame = () => {
+      if (!videoEl.ended && !videoEl.paused) {
+        ctx.drawImage(videoEl, 0, 0, targetWidth, targetHeight);
+        const pct = Math.min(Math.round((videoEl.currentTime / videoEl.duration) * 100), 99);
+        progressBar.style.width = `${pct}%`;
+        progressPercent.textContent = `${pct}%`;
+        requestAnimationFrame(renderFrame);
+      }
+    };
+    renderFrame();
+
+    videoEl.onended = () => {
+      mediaRecorder.stop();
+      progressBar.style.width = '100%';
+      progressPercent.textContent = '100%';
+    };
+
+  } catch (err) {
+    console.error("Error compression:", err);
+    alert("Gagal memproses video: " + err.message);
     progressSection.classList.add('hidden');
     processSection.classList.remove('hidden');
   }
