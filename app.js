@@ -1,11 +1,11 @@
 const { createFFmpeg, fetchFile } = FFmpeg;
 
-// Inisialisasi FFmpeg v0.11 dengan pembatasan memori agar tidak error "could not allocate memory"
+// Batasi alokasi memori Emscripten agar tidak langsung minta 1GB+
 const ffmpeg = createFFmpeg({
   log: true,
   corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
-  // Konfigurasi alokasi memori WebAssembly yang aman untuk browser
-  mainScriptUrl: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+  // Opsi paksa alokasi awal RAM lebih kecil
+  INITIAL_MEMORY: 67108864, // 64MB awal (akan auto-expand jika kurang)
 });
 
 // DOM Elements
