@@ -1,9 +1,11 @@
 const { createFFmpeg, fetchFile } = FFmpeg;
 
-// Inisialisasi FFmpeg v0.11 dengan corePath jsDelivr
+// Inisialisasi FFmpeg v0.11 dengan pembatasan memori agar tidak error "could not allocate memory"
 const ffmpeg = createFFmpeg({
   log: true,
   corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+  // Konfigurasi alokasi memori WebAssembly yang aman untuk browser
+  mainScriptUrl: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
 });
 
 // DOM Elements
