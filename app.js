@@ -1,9 +1,10 @@
 const { createFFmpeg, fetchFile } = FFmpeg;
 
-// Inisialisasi engine FFmpeg
+// Inisialisasi dengan opsi tambahan
 const ffmpeg = createFFmpeg({
-  log: false,
-  corePath: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js'
+  log: true,
+  corePath: 'https://unpkg.com/@ffmpeg/core@0.11.0/dist/ffmpeg-core.js',
+  // Menggunakan worker dan pengaturan memori dasar jika didukung
 });
 
 // DOM Elements
@@ -30,7 +31,6 @@ const downloadLink = document.getElementById('downloadLink');
 
 let rawFile = null;
 
-// Helper: Format bytes to MB
 function formatBytes(bytes) {
   if (bytes === 0) return '0 MB';
   const mb = bytes / (1024 * 1024);
@@ -39,28 +39,16 @@ function formatBytes(bytes) {
 
 // Drag and Drop Handler
 dropZone.addEventListener('click', () => videoInput.click());
-
-dropZone.addEventListener('dragover', (e) => {
-  e.preventDefault();
-  dropZone.classList.add('dragover');
-});
-
-dropZone.addEventListener('dragleave', () => {
-  dropZone.classList.remove('dragover');
-});
-
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop', (e) => {
   e.preventDefault();
   dropZone.classList.remove('dragover');
-  if (e.dataTransfer.files.length) {
-    handleFile(e.dataTransfer.files[0]);
-  }
+  if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
 });
 
 videoInput.addEventListener('change', (e) => {
-  if (e.target.files.length) {
-    handleFile(e.target.files[0]);
-  }
+  if (e.target.files.length) handleFile(e.target.files[0]);
 });
 
 function handleFile(file) {
@@ -92,59 +80,75 @@ btnCompress.addEventListener('click', async () => {
   processSection.classList.add('hidden');
   progressSection.classList.remove('hidden');
   
-  statusText.textContent = "Menyiapkan Engine...";
-  progressBar.style.width = '0%';
-  progressPercent.textContent = '0%';
+  try {
+    statusText.textContent = "Memuat Engine FFmpeg (bisa beberapa detik)...";
+    progressBar.style.width = '10%';
+    progressPercent.textContent = '10%';
 
-  if (!ffmpeg.isLoaded()) {
-    await ffmpeg.load();
-  }
+    if (!ffmpeg.isLoaded()) {
+      await ffmpeg.load();
+    }
 
-  const inputName = 'input_video' + getFileExtension(rawFile.name);
-  const outputName = 'output_compressed.mp4';
+    statusText.textContent = "Menyiapkan file video...";
+    progressBar.style.width = '30%';
+    progressPercent.textContent = '30%';
 
-  ffmpeg.FS('writeFile', inputName, await fetchFile(rawFile));
+    const inputName = 'input_video' + getFileExtension(rawFile.name);
+    const outputName = 'output_compressed.mp4';
 
-  // Menghitung progress secara presisi
-  ffmpeg.setProgress(({ ratio }) => {
-    const pct = Math.min(Math.max(Math.round(ratio * 100), 0), 100);
-    progressBar.style.width = `${pct}%`;
-    progressPercent.textContent = `${pct}%`;
+    ffmpeg.FS('writeFile', inputName, await fetchFile(rawFile));
+
     statusText.textContent = "Mengompresi Video...";
-  });
+    // Menangkap progress rendering video
+    ffmpeg.setProgress(({ ratio }) => {
+      // ratio berkisar dari 0 sampai 1
+      const pct = Math.min(Math.max(Math.round(ratio * 70) + 30, 30), 100);
+      progressBar.style.width = `${pct}%`;
+      progressPercent.textContent = `${pct}%`;
+    });
 
-  const crf = qualitySelect.value;
-  const res = resolutionSelect.value;
+    const crf = qualitySelect.value;
+    const res = resolutionSelect.value;
 
-  // Menyusun argumen FFmpeg
-  let args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'medium'];
+    let args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'medium'];
 
-  // Mengatur penyesuaian resolusi jika dipilih
-  if (res !== 'original') {
-    args.push('-vf', `scale=-2:${res}`);
+    if (res !== 'original') {
+      args.push('-vf', `scale=-2:${res}`);
+    }
+
+    args.push('-c:a', 'aac', '-b:a', '128k', outputName);
+
+    await ffmpeg.run(...args);
+
+    statusText.textContent = "Menyelesaikan hasil...";
+    progressBar.style.width = '100%';
+    progressPercent.textContent = '100%';
+
+    const data = ffmpeg.FS('readFile', outputName);
+    const compressedBlob = new Blob([data.buffer], { type: 'video/mp4' });
+
+    sizeBeforeEl.textContent = formatBytes(rawFile.size);
+    sizeAfterEl.textContent = formatBytes(compressedBlob.size);
+
+    if (downloadLink.href) {
+      URL.revokeObjectURL(downloadLink.href);
+    }
+    downloadLink.href = URL.createObjectURL(compressedBlob);
+
+    ffmpeg.FS('unlink', inputName);
+    ffmpeg.FS('unlink', outputName);
+
+    setTimeout(() => {
+      progressSection.classList.add('hidden');
+      resultSection.classList.remove('hidden');
+    }, 500);
+
+  } catch (error) {
+    console.error(error);
+    alert('Terjadi kesalahan saat memproses video. Cek console (F12) untuk detailnya.');
+    progressSection.classList.add('hidden');
+    processSection.classList.remove('hidden');
   }
-
-  // Pengaturan audio AAC standar tinggi
-  args.push('-c:a', 'aac', '-b:a', '128k', outputName);
-
-  await ffmpeg.run(...args);
-
-  const data = ffmpeg.FS('readFile', outputName);
-  const compressedBlob = new Blob([data.buffer], { type: 'video/mp4' });
-
-  // Update UI Hasil
-  sizeBeforeEl.textContent = formatBytes(rawFile.size);
-  sizeAfterEl.textContent = formatBytes(compressedBlob.size);
-
-  const url = URL.revokeObjectURL(downloadLink.href);
-  downloadLink.href = URL.createObjectURL(compressedBlob);
-
-  // Unlink file internal FFmpeg untuk hemat memori
-  ffmpeg.FS('unlink', inputName);
-  ffmpeg.FS('unlink', outputName);
-
-  progressSection.classList.add('hidden');
-  resultSection.classList.remove('hidden');
 });
 
 function getFileExtension(filename) {
